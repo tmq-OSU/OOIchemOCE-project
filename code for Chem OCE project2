@@ -1,0 +1,235 @@
+#@markdown <div align="center"> <img src="https://ooinet.oceanobservatories.org/img/logos-banners/OOI_Logo_RGB.png" width="30%" /> <img src="https://omni.okstate.edu/_resources_global/pattern-lab-v1/images/logo-vertical.svg" width="15%" /></div>
+
+#@markdown #<div align="center">OOI Data Visualizer</div>
+#@markdown ---
+
+#@markdown This program will request data for specific instruments from the OOI Data Portal. Plots from this dataset can then be produced.
+
+#@markdown ---
+
+from IPython.utils import io
+print('Please wait... Loading')
+with io.capture_output() as captured:
+  try:
+    import google.colab
+    IN_COLAB = True
+  except:
+    IN_COLAB = False
+
+  if IN_COLAB:
+      !pip install netcdf4==1.5.0
+      !pip install git+https://github.com/tmq-OSU/OOIgetdata.git
+      !pip intall A
+
+  if not IN_COLAB:
+      %matplotlib widget
+  import pandas as pd
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import xarray as xr
+  import OOIgetdata as ooi
+  import ipywidgets as widgets
+  from IPython.display import display
+  from IPython.display import clear_output
+  import requests
+  import re
+  import os
+  import time
+  import sys
+
+#@markdown API information
+API_USERNAME = '' #@param {type:"string"}
+API_TOKEN = '' #@param {type:"string"}
+
+#@markdown ##<div align="center">OOI Instrument Parameters</div>
+#@markdown Research Array Information
+site = 'CE09OSPM' #@param {type:"string"}
+node = 'WFP01' #@param {type:"string"}
+method = 'recovered_wfp' 
+#@markdown Dissolved Oxygen Instrument Information
+do_instrument = '02-DOFSTK000' #@param {type:"string"}
+if "DOF" in do_instrument:
+  do_stream = 'dofst_k_wfp_instrument_recovered'
+elif "DOS" in do_instrument:
+  do_stream = 'dosta_ln_wfp_instrument_recovered'
+else:
+  sys.exit("Invalid DO Instrument Information")
+#do_stream = 'dofst_k' #@param ["dofst_k", "dosta_ln"]
+do_stream_complete = do_stream + "_wfp_instrument_recovered"
+#@markdown CTD Instrument Information
+ctd_instrument = '03-CTDPFK000' #@param {type:"string"}
+ctd_stream = 'ctdpf_ckl_wfp_instrument_recovered'
+#@markdown Starting and Ending Dates
+startdate = '2017-05-18' #@param {type:"date"}
+starttime = '00:00'
+enddate = '2017-05-19' #@param {type:"date"}
+endtime = '00:00'
+#@markdown ___
+#@markdown
+params = {
+  'beginDT':startdate + 'T' + starttime + ':00.000Z',
+  'endDT':enddate + 'T' + endtime + ':00.000Z',
+  'format':'application/netcdf',
+  'include_provenance':'true',
+  'include_annotations':'true'
+}
+ooi_url_bool = False
+#@markdown ##<div align="center">OOI Dataset URL</div>
+#@markdown This URL is used to access the specific dataset requested based on the parameters above. If the field below is blank then a new URL will be generated and printed at the bottom of this block. Copy that URL to the ooi_url field in order to access the same dataset in the future.
+
+#@markdown
+do_url = "" #@param {type: "string"}
+ctd_url = "" #@param {type: "string"}
+#@markdown ___
+ooi_backup = "https://opendap.oceanobservatories.org/thredds/catalog/ooi/OSUGEOL4503@gmail.com/20200504T180021863Z-CE01ISSP-SP001-02-DOSTAJ000-recovered_cspp-dosta_abcdjm_cspp_instrument_recovered/catalog.html"
+if do_url == "":
+  ooi_url_bool = True
+  clear_output()
+  print('Please wait... Generating Dissolved Oxygen URL')
+  with io.capture_output() as captured:
+    do_data_request_url,do_meta_data = ooi.make_url(site,node,do_instrument,method,do_stream,API_USERNAME,API_TOKEN)
+    do_meta_data
+
+    do_thredds, do_netcdf, do_data = ooi.make_data_request(do_data_request_url,params,API_USERNAME,API_TOKEN)
+    do_thredds
+  do_url = do_thredds
+  clear_output()
+  print('Please wait... Generating CTD URL')
+  with io.capture_output() as captured:
+    ctd_data_request_url,ctd_meta_data = ooi.make_url(site,node,ctd_instrument,method,ctd_stream,API_USERNAME,API_TOKEN)
+    ctd_meta_data
+
+    ctd_thredds, ctd_netcdf, ctd_data = ooi.make_data_request(ctd_data_request_url,params,API_USERNAME,API_TOKEN)
+    ctd_thredds
+  ctd_url = ctd_thredds
+  clear_output()
+  print('URL generation complete... Accessing Data')
+if ooi_url_bool == True:
+  print("DO Data URL (Copy this to the 'DO_url' field): " + do_url)
+  print("CTD Data URL (Copy this to the 'CTD_url' field): " + ctd_url)
+
+if ooi_url_bool == False:
+  clear_output()
+  print('Please wait... Accessing Data')
+
+def get_data(url, bad_inst=''):
+  '''Function to grab all data from specified directory'''
+  tds_url = 'https://opendap.oceanobservatories.org/thredds/dodsC'
+  datasets = requests.get(url).text
+  urls = re.findall(r'href=[\'"]?([^\'" >]+)', datasets)
+  x = re.findall(r'(ooi/.*?.nc)', datasets)
+  for i in x:
+    if i.endswith('.nc') == False:
+      x.remove(i)
+  for i in x:
+    try:
+      float(i[-4])
+    except:
+      x.remove(i)
+  datasets = [os.path.join(tds_url, i) for i in x]
+  
+  # Remove extraneous files if necessary
+  #selected_datasets = []
+  #for d in datasets:
+    #if (bad_inst) and bad_inst in d:
+     # pass
+    #elif 'ENG000' in d: #Remove engineering streams for gliders
+      #pass
+    #else:
+      #selected_datasets.append(d)
+  #print(selected_datasets)
+  
+  # Load in dataset
+  ds = xr.open_mfdataset(datasets, compat='override')
+  ds = ds.swap_dims({'obs': 'time'}) # Swap the primary dimension
+  # ds = ds.chunk({'time': 100}) # Used for optimization
+  ds = ds.sortby('time') # Data from different deployments can overlap so we want to sort all data by time stamp.
+ 
+  return ds
+
+with io.capture_output() as captured:
+  data_do = get_data(do_url, 'CTDPF')
+  data_ctd = get_data(ctd_url, 'Pressure')
+  data_do_avg = data_do.to_dataframe().resample('1T').mean()
+  data_ctd_avg = data_ctd.to_dataframe().resample('1T').mean()
+  data_ctd_avg = data_ctd_avg[['ctdpf_ckl_seawater_pressure','practical_salinity', 'ctdpf_ckl_seawater_temperature']]
+  if "DOF" in do_instrument:
+    data_do_avg = data_do_avg[['dofst_k_oxygen_l2']]
+    do_name = 'dofst_k_oxygen_l2'
+  if "DOS" in do_instrument:
+    data_do_avg = data_do_avg[['dissolved_oxygen']]
+    do_name = 'dissolved_oxygen'
+  # Merge the 3 datasets
+  data = data_do_avg.merge(data_ctd_avg,on='time',how='outer')
+  data = data.rename(columns={'ctdpf_ckl_seawater_pressure':'Pressure','practical_salinity':'Salinity','ctdpf_ckl_seawater_temperature':'Temperature',do_name:'Oxygen'})
+  # Drop unncessary columns
+  #data = data.drop(['obs_x','obs_y'],axis=1)
+
+
+from ipywidgets import Button, Layout, TwoByTwoLayout, Dropdown, Style, Box, VBox, Output, interact, interactive, interact_manual, interactive_output
+arr = ['Salinity', 'Temperature', 'Oxygen']
+style = {'description_width': 'initial'}
+output = widgets.Output()
+form_item_layout = Layout(
+    display='flex',
+    flex_flow='row',
+    justify_content='flex-start',
+    width='20%',
+    background='white'
+)
+xax= Dropdown(options=arr, description="X-Axis Variable", style=style, layout=form_item_layout)
+yax= Dropdown(options=arr, description="Y-Axis Variable", style=style, layout=form_item_layout)
+items= [xax]
+
+box_layout = Layout(display='flex',
+                    flex_flow='row',
+                    align_items='stretch',
+                    justify_content='flex-start',
+                    width='100%',
+                    background='white'
+                    )
+listbox = Box(children=items, layout=box_layout)
+listbox.box_style
+import seaborn
+seaborn.set()
+def Plotter(xa, ya):
+  a = "data." + xa
+  b = eval(a)
+  c = "data." + ya
+  d = eval(c)
+  #if hasattr(b, 'long_name')==False or hasattr(d, 'long_name')==False:
+   # print("Invalid Data")
+  #else:
+    #[l.remove() for l in ax.lines]
+  fig, (ax1) = plt.subplots(1, sharex=False, sharey=True, tight_layout=True)
+  fig.set_size_inches(10,8)
+  input1 = xa
+  result1= "data." + input1
+  axis1 = eval(result1)
+  input2 = ya
+  result2 = "data." + input2
+  axis2 = data.Pressure
+  ax1.plot(axis1,axis2,'.')
+  ax1.invert_yaxis()
+  if input1 == "Oxygen":
+    ax1.set_xlabel("Dissolved Oxygen (μmol/kg)")
+  elif input1 == "Salinity":
+    ax1.set_xlabel("Practical Salinity (PSU)")
+  else:
+    ax1.set_xlabel("Temperature (°C)")
+  ax1.set_ylabel("Depth (m)")
+  ax1.set_title(axis1.name + " vs Depth");
+    #ax1.autoscale(True)
+
+
+clear_output()
+if ooi_url_bool == True:
+  print("DO Data URL (Copy this to the 'do_url' field): " + do_url)
+  print("CTD Data URL (Copy this to the 'ctd_url' field): " + ctd_url)
+  print(" ")
+  print(" ")
+
+interactive_plot = interactive_output(Plotter, {'xa':xax, 'ya':yax})
+display(listbox)
+print(" ")
+interactive_plot
